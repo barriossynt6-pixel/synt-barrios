@@ -1,24 +1,29 @@
 from flask import Flask, jsonify, request
+from datetime import datetime
 
 app = Flask(__name__)
 
 # -------------------- IN-MEMORY DATABASE --------------------
 students = [
-    {"id": 1, "name": "John Doe", "grade": 10, "section": "Zechariah"},
-    {"id": 2, "name": "Jane Smith", "grade": 9, "section": "Genesis"}
+    {
+        "id": 1,
+        "name": "John Doe",
+        "grade": 10,
+        "section": "Zechariah",
+        "attendance": []
+    }
 ]
 
 # -------------------- HOME --------------------
 @app.route('/')
 def home():
-    return "Welcome to my Flask API with CRUD!"
+    return "Student Attendance API"
 
-# -------------------- CREATE --------------------
+# -------------------- ADD STUDENT --------------------
 @app.route('/students', methods=['POST'])
 def add_student():
     data = request.get_json()
 
-    # Validate input
     if not data or not all(k in data for k in ("name", "grade", "section")):
         return jsonify({"error": "Missing required fields"}), 400
 
@@ -26,7 +31,8 @@ def add_student():
         "id": students[-1]["id"] + 1 if students else 1,
         "name": data["name"],
         "grade": data["grade"],
-        "section": data["section"]
+        "section": data["section"],
+        "attendance": []  # empty attendance list
     }
 
     students.append(new_student)
@@ -36,25 +42,50 @@ def add_student():
         "student": new_student
     }), 201
 
-# -------------------- READ ALL --------------------
+# -------------------- GET ALL STUDENTS --------------------
 @app.route('/students', methods=['GET'])
 def get_students():
-    return jsonify({
-        "count": len(students),
-        "students": students
-    })
+    return jsonify(students)
 
-# -------------------- READ ONE --------------------
-@app.route('/students/<int:id>', methods=['GET'])
-def get_student(id):
+# -------------------- MARK ATTENDANCE --------------------
+@app.route('/students/<int:id>/attendance', methods=['POST'])
+def mark_attendance(id):
     student = next((s for s in students if s["id"] == id), None)
 
     if not student:
         return jsonify({"error": "Student not found"}), 404
 
-    return jsonify(student)
+    data = request.get_json()
 
-# -------------------- UPDATE --------------------
+    if "status" not in data:
+        return jsonify({"error": "Status required (Present/Absent)"}), 400
+
+    record = {
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "status": data["status"]
+    }
+
+    student["attendance"].append(record)
+
+    return jsonify({
+        "message": "Attendance marked",
+        "attendance": record
+    })
+
+# -------------------- VIEW ATTENDANCE --------------------
+@app.route('/students/<int:id>/attendance', methods=['GET'])
+def get_attendance(id):
+    student = next((s for s in students if s["id"] == id), None)
+
+    if not student:
+        return jsonify({"error": "Student not found"}), 404
+
+    return jsonify({
+        "name": student["name"],
+        "attendance": student["attendance"]
+    })
+
+# -------------------- UPDATE STUDENT --------------------
 @app.route('/students/<int:id>', methods=['PUT'])
 def update_student(id):
     student = next((s for s in students if s["id"] == id), None)
@@ -69,11 +100,11 @@ def update_student(id):
     student["section"] = data.get("section", student["section"])
 
     return jsonify({
-        "message": "Student updated successfully",
+        "message": "Student updated",
         "student": student
     })
 
-# -------------------- DELETE --------------------
+# -------------------- DELETE STUDENT --------------------
 @app.route('/students/<int:id>', methods=['DELETE'])
 def delete_student(id):
     global students
@@ -85,10 +116,8 @@ def delete_student(id):
 
     students = [s for s in students if s["id"] != id]
 
-    return jsonify({
-        "message": "Student deleted successfully"
-    })
+    return jsonify({"message": "Student deleted"})
 
-# -------------------- RUN APP --------------------
+# -------------------- RUN --------------------
 if __name__ == '__main__':
     app.run(debug=True)
