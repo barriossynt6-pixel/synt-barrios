@@ -145,7 +145,7 @@ HTML_PAGE = """
 <body>
 
 <div class="container">
-    <h1>🍇 Student Management System</h1>
+    <h1>🍇 Student Record of Section Grapes</h1>
 
     <input type="text" id="name" placeholder="Name">
     <input type="number" id="grade" placeholder="Grade">
