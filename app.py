@@ -1,17 +1,15 @@
-from flask import Flask, jsonify, request
-from datetime import datetime
+from flask import Flask, jsonify, request, render_template_string
 import sqlite3
 
 app = Flask(__name__)
 DB_NAME = "students.db"
 
-# -------------------- DATABASE HELPER --------------------
+# -------------------- DATABASE --------------------
 def get_db():
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     return conn
 
-# -------------------- DATABASE SETUP --------------------
 def init_db():
     conn = get_db()
     cursor = conn.cursor()
@@ -25,40 +23,177 @@ def init_db():
         )
     ''')
 
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS attendance (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            student_id INTEGER,
-            date TEXT,
-            status TEXT,
-            FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
-        )
-    ''')
-
     conn.commit()
     conn.close()
 
 init_db()
 
+# -------------------- HTML + CSS --------------------
+HTML_PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Student System</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f4f6f8;
+            text-align: center;
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        .container {
+            width: 60%;
+            margin: auto;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+
+        input {
+            padding: 10px;
+            margin: 5px;
+            width: 25%;
+        }
+
+        button {
+            padding: 10px 15px;
+            background: #007BFF;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+
+        button:hover {
+            background: #0056b3;
+        }
+
+        .delete-btn {
+            background: red;
+        }
+
+        .delete-btn:hover {
+            background: darkred;
+        }
+
+        table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 10px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        th {
+            background: #007BFF;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Student Management System</h1>
+
+    <input type="text" id="name" placeholder="Name">
+    <input type="number" id="grade" placeholder="Grade">
+    <input type="text" id="section" placeholder="Section">
+    <br>
+    <button onclick="addStudent()">Add Student</button>
+
+    <table>
+        <tr>
+            <th>Name</th>
+            <th>Grade</th>
+            <th>Section</th>
+            <th>Action</th>
+        </tr>
+
+        {% for student in students %}
+        <tr>
+            <td>{{ student.name }}</td>
+            <td>{{ student.grade }}</td>
+            <td>{{ student.section }}</td>
+            <td>
+                <button class="delete-btn" onclick="deleteStudent({{ student.id }})">
+                    Delete
+                </button>
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+</div>
+
+<script>
+function addStudent() {
+    const name = document.getElementById('name').value;
+    const grade = document.getElementById('grade').value;
+    const section = document.getElementById('section').value;
+
+    fetch('/api/students', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, grade, section })
+    })
+    .then(res => res.json())
+    .then(() => location.reload());
+}
+
+function deleteStudent(id) {
+    fetch('/api/students/' + id, {
+        method: 'DELETE'
+    })
+    .then(() => location.reload());
+}
+</script>
+
+</body>
+</html>
+"""
+
 # -------------------- HOME --------------------
 @app.route('/')
 def home():
-    return jsonify({"message": "Student Attendance Record API"})
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM students")
+    students = cursor.fetchall()
+    conn.close()
 
-# -------------------- ADD STUDENT --------------------
-@app.route('/students', methods=['POST'])
+    return render_template_string(HTML_PAGE, students=students)
+
+# -------------------- API --------------------
+@app.route('/api/students', methods=['GET'])
+def get_students():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM students")
+    students = cursor.fetchall()
+    conn.close()
+
+    return jsonify([dict(s) for s in students])
+
+@app.route('/api/students', methods=['POST'])
 def add_student():
     data = request.get_json()
 
     if not data:
-        return jsonify({"error": "Invalid JSON"}), 400
+        return jsonify({"error": "Invalid input"}), 400
 
     name = data.get("name")
     grade = data.get("grade")
     section = data.get("section")
 
     if not all([name, grade, section]):
-        return jsonify({"error": "Missing fields"}), 400
+        return jsonify({"error": "All fields required"}), 400
 
     conn = get_db()
     cursor = conn.cursor()
@@ -67,200 +202,22 @@ def add_student():
         "INSERT INTO students (name, grade, section) VALUES (?, ?, ?)",
         (name, grade, section)
     )
-    conn.commit()
-
-    student_id = cursor.lastrowid
-    conn.close()
-
-    return jsonify({
-        "message": "Student added",
-        "student": {
-            "id": student_id,
-            "name": name,
-            "grade": grade,
-            "section": section
-        }
-    }), 201
-
-# -------------------- UPDATE STUDENT --------------------
-@app.route('/students/<int:id>', methods=['PUT'])
-def update_student(id):
-    data = request.get_json()
-
-    if not data:
-        return jsonify({"error": "Invalid JSON"}), 400
-
-    conn = get_db()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT * FROM students WHERE id = ?", (id,))
-    if not cursor.fetchone():
-        conn.close()
-        return jsonify({"error": "Student not found"}), 404
-
-    name = data.get("name")
-    grade = data.get("grade")
-    section = data.get("section")
-
-    cursor.execute("""
-        UPDATE students
-        SET name = COALESCE(?, name),
-            grade = COALESCE(?, grade),
-            section = COALESCE(?, section)
-        WHERE id = ?
-    """, (name, grade, section, id))
 
     conn.commit()
     conn.close()
 
-    return jsonify({"message": "Student updated"})
+    return jsonify({"message": "Student added"})
 
-# -------------------- MARK ATTENDANCE --------------------
-@app.route('/students/<int:id>/attendance', methods=['POST'])
-def mark_attendance(id):
-    data = request.get_json()
-
-    if not data or "status" not in data:
-        return jsonify({"error": "Status required"}), 400
-
-    status = data["status"].capitalize()
-    if status not in ["Present", "Absent"]:
-        return jsonify({"error": "Status must be Present or Absent"}), 400
-
-    date = data.get("date", datetime.now().strftime("%Y-%m-%d"))
-
-    conn = get_db()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT * FROM students WHERE id = ?", (id,))
-    if not cursor.fetchone():
-        conn.close()
-        return jsonify({"error": "Student not found"}), 404
-
-    cursor.execute(
-        "INSERT INTO attendance (student_id, date, status) VALUES (?, ?, ?)",
-        (id, date, status)
-    )
-
-    conn.commit()
-    conn.close()
-
-    return jsonify({
-        "message": "Attendance recorded",
-        "record": {"date": date, "status": status}
-    })
-
-# -------------------- DELETE ATTENDANCE --------------------
-@app.route('/attendance/<int:attendance_id>', methods=['DELETE'])
-def delete_attendance(attendance_id):
-    conn = get_db()
-    cursor = conn.cursor()
-
-    cursor.execute("DELETE FROM attendance WHERE id = ?", (attendance_id,))
-    conn.commit()
-    conn.close()
-
-    return jsonify({"message": "Attendance deleted"})
-
-# -------------------- FULL RECORD --------------------
-@app.route('/students/<int:id>/record', methods=['GET'])
-def attendance_record(id):
-    conn = get_db()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT name FROM students WHERE id = ?", (id,))
-    student = cursor.fetchone()
-
-    if not student:
-        conn.close()
-        return jsonify({"error": "Student not found"}), 404
-
-    cursor.execute("""
-        SELECT id, date, status 
-        FROM attendance 
-        WHERE student_id = ?
-        ORDER BY date DESC
-    """, (id,))
-    records = cursor.fetchall()
-
-    conn.close()
-
-    attendance = [
-        {"id": r["id"], "date": r["date"], "status": r["status"]}
-        for r in records
-    ]
-
-    present = sum(1 for r in attendance if r["status"] == "Present")
-    absent = sum(1 for r in attendance if r["status"] == "Absent")
-
-    return jsonify({
-        "student": student["name"],
-        "total_days": len(attendance),
-        "present": present,
-        "absent": absent,
-        "attendance": attendance
-    })
-
-# -------------------- FILTER BY DATE --------------------
-@app.route('/students/<int:id>/record/<date>', methods=['GET'])
-def attendance_by_date(id, date):
-    conn = get_db()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT id, date, status 
-        FROM attendance 
-        WHERE student_id = ? AND date = ?
-    """, (id, date))
-
-    records = cursor.fetchall()
-    conn.close()
-
-    return jsonify({
-        "student_id": id,
-        "date": date,
-        "records": [
-            {"id": r["id"], "date": r["date"], "status": r["status"]}
-            for r in records
-        ]
-    })
-
-# -------------------- GET ALL STUDENTS --------------------
-@app.route('/students', methods=['GET'])
-def get_students():
-    conn = get_db()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT * FROM students")
-    rows = cursor.fetchall()
-    conn.close()
-
-    return jsonify([
-        {
-            "id": r["id"],
-            "name": r["name"],
-            "grade": r["grade"],
-            "section": r["section"]
-        }
-        for r in rows
-    ])
-
-# -------------------- DELETE STUDENT --------------------
-@app.route('/students/<int:id>', methods=['DELETE'])
+@app.route('/api/students/<int:id>', methods=['DELETE'])
 def delete_student(id):
     conn = get_db()
     cursor = conn.cursor()
-
-    cursor.execute("SELECT * FROM students WHERE id = ?", (id,))
-    if not cursor.fetchone():
-        conn.close()
-        return jsonify({"error": "Student not found"}), 404
 
     cursor.execute("DELETE FROM students WHERE id = ?", (id,))
     conn.commit()
     conn.close()
 
-    return jsonify({"message": "Student deleted successfully"})
+    return jsonify({"message": "Deleted"})
 
 # -------------------- RUN --------------------
 if __name__ == '__main__':
