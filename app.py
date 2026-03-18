@@ -1,3 +1,34 @@
+from flask import Flask, jsonify, request, render_template_string
+import sqlite3
+
+app = Flask(__name__)
+DB_NAME = "students.db"
+
+# -------------------- DATABASE --------------------
+def get_db():
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS students (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            grade INTEGER NOT NULL,
+            section TEXT NOT NULL
+        )
+    ''')
+
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# -------------------- HTML + CSS + ANIMATION --------------------
 HTML_PAGE = """
 <!DOCTYPE html>
 <html>
@@ -25,7 +56,7 @@ HTML_PAGE = """
         .container {
             width: 70%;
             margin: 40px auto;
-            background: rgba(255, 255, 255, 0.95);
+            background: rgba(255,255,255,0.95);
             padding: 25px;
             border-radius: 15px;
             box-shadow: 0 10px 25px rgba(0,0,0,0.3);
@@ -193,3 +224,85 @@ function editStudent(id, name, grade, section) {
 </body>
 </html>
 """
+
+# -------------------- HOME --------------------
+@app.route('/')
+def home():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM students")
+    students = cursor.fetchall()
+    conn.close()
+
+    return render_template_string(HTML_PAGE, students=students)
+
+# -------------------- GET --------------------
+@app.route('/api/students', methods=['GET'])
+def get_students():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM students")
+    students = cursor.fetchall()
+    conn.close()
+
+    return jsonify([dict(s) for s in students])
+
+# -------------------- ADD --------------------
+@app.route('/api/students', methods=['POST'])
+def add_student():
+    data = request.get_json()
+
+    name = data.get("name")
+    grade = data.get("grade")
+    section = data.get("section")
+
+    if not all([name, grade, section]):
+        return jsonify({"error": "All fields required"}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "INSERT INTO students (name, grade, section) VALUES (?, ?, ?)",
+        (name, grade, section)
+    )
+
+    conn.commit()
+    conn.close()
+
+    return jsonify({"message": "Added"})
+
+# -------------------- UPDATE --------------------
+@app.route('/api/students/<int:id>', methods=['PUT'])
+def update_student(id):
+    data = request.get_json()
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE students
+        SET name=?, grade=?, section=?
+        WHERE id=?
+    """, (data["name"], data["grade"], data["section"], id))
+
+    conn.commit()
+    conn.close()
+
+    return jsonify({"message": "Updated"})
+
+# -------------------- DELETE --------------------
+@app.route('/api/students/<int:id>', methods=['DELETE'])
+def delete_student(id):
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("DELETE FROM students WHERE id = ?", (id,))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"message": "Deleted"})
+
+# -------------------- RUN --------------------
+if __name__ == '__main__':
+    app.run(debug=True)
