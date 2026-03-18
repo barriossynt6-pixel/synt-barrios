@@ -28,7 +28,7 @@ def init_db():
 
 init_db()
 
-# -------------------- HTML + CSS --------------------
+# -------------------- HTML --------------------
 HTML_PAGE = """
 <!DOCTYPE html>
 <html>
@@ -36,50 +36,36 @@ HTML_PAGE = """
     <title>Student System</title>
     <style>
         body {
-            font-family: Arial, sans-serif;
+            font-family: Arial;
             background: #f4f6f8;
             text-align: center;
         }
 
-        h1 {
-            color: #333;
-        }
-
         .container {
-            width: 60%;
+            width: 70%;
             margin: auto;
             background: white;
             padding: 20px;
             border-radius: 10px;
-            box-shadow: 0 0 10px rgba(0,0,0,0.1);
         }
 
         input {
             padding: 10px;
             margin: 5px;
-            width: 25%;
         }
 
         button {
-            padding: 10px 15px;
-            background: #007BFF;
-            color: white;
+            padding: 8px 12px;
+            margin: 2px;
             border: none;
+            color: white;
             cursor: pointer;
             border-radius: 5px;
         }
 
-        button:hover {
-            background: #0056b3;
-        }
-
-        .delete-btn {
-            background: red;
-        }
-
-        .delete-btn:hover {
-            background: darkred;
-        }
+        .add-btn { background: blue; }
+        .delete-btn { background: red; }
+        .edit-btn { background: orange; }
 
         table {
             width: 100%;
@@ -106,26 +92,26 @@ HTML_PAGE = """
     <input type="text" id="name" placeholder="Name">
     <input type="number" id="grade" placeholder="Grade">
     <input type="text" id="section" placeholder="Section">
-    <br>
-    <button onclick="addStudent()">Add Student</button>
+    <button class="add-btn" onclick="addStudent()">Add</button>
 
     <table>
         <tr>
+            <th>ID</th>
             <th>Name</th>
             <th>Grade</th>
             <th>Section</th>
-            <th>Action</th>
+            <th>Actions</th>
         </tr>
 
         {% for student in students %}
         <tr>
+            <td>{{ student.id }}</td>
             <td>{{ student.name }}</td>
             <td>{{ student.grade }}</td>
             <td>{{ student.section }}</td>
             <td>
-                <button class="delete-btn" onclick="deleteStudent({{ student.id }})">
-                    Delete
-                </button>
+                <button class="edit-btn" onclick="editStudent({{ student.id }}, '{{ student.name }}', {{ student.grade }}, '{{ student.section }}')">Edit</button>
+                <button class="delete-btn" onclick="deleteStudent({{ student.id }})">Delete</button>
             </td>
         </tr>
         {% endfor %}
@@ -134,24 +120,39 @@ HTML_PAGE = """
 
 <script>
 function addStudent() {
-    const name = document.getElementById('name').value;
-    const grade = document.getElementById('grade').value;
-    const section = document.getElementById('section').value;
-
     fetch('/api/students', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, grade, section })
-    })
-    .then(res => res.json())
-    .then(() => location.reload());
+        body: JSON.stringify({
+            name: document.getElementById('name').value,
+            grade: document.getElementById('grade').value,
+            section: document.getElementById('section').value
+        })
+    }).then(() => location.reload());
 }
 
 function deleteStudent(id) {
     fetch('/api/students/' + id, {
         method: 'DELETE'
-    })
-    .then(() => location.reload());
+    }).then(() => location.reload());
+}
+
+function editStudent(id, name, grade, section) {
+    const newName = prompt("Enter name:", name);
+    const newGrade = prompt("Enter grade:", grade);
+    const newSection = prompt("Enter section:", section);
+
+    if (!newName || !newGrade || !newSection) return;
+
+    fetch('/api/students/' + id, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            name: newName,
+            grade: newGrade,
+            section: newSection
+        })
+    }).then(() => location.reload());
 }
 </script>
 
@@ -170,7 +171,7 @@ def home():
 
     return render_template_string(HTML_PAGE, students=students)
 
-# -------------------- API --------------------
+# -------------------- GET --------------------
 @app.route('/api/students', methods=['GET'])
 def get_students():
     conn = get_db()
@@ -181,12 +182,10 @@ def get_students():
 
     return jsonify([dict(s) for s in students])
 
+# -------------------- ADD --------------------
 @app.route('/api/students', methods=['POST'])
 def add_student():
     data = request.get_json()
-
-    if not data:
-        return jsonify({"error": "Invalid input"}), 400
 
     name = data.get("name")
     grade = data.get("grade")
@@ -206,8 +205,28 @@ def add_student():
     conn.commit()
     conn.close()
 
-    return jsonify({"message": "Student added"})
+    return jsonify({"message": "Added"})
 
+# -------------------- UPDATE --------------------
+@app.route('/api/students/<int:id>', methods=['PUT'])
+def update_student(id):
+    data = request.get_json()
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE students
+        SET name=?, grade=?, section=?
+        WHERE id=?
+    """, (data["name"], data["grade"], data["section"], id))
+
+    conn.commit()
+    conn.close()
+
+    return jsonify({"message": "Updated"})
+
+# -------------------- DELETE --------------------
 @app.route('/api/students/<int:id>', methods=['DELETE'])
 def delete_student(id):
     conn = get_db()
