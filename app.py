@@ -5,17 +5,23 @@ import sqlite3
 app = Flask(__name__)
 DB_NAME = "students.db"
 
+# -------------------- DATABASE HELPER --------------------
+def get_db():
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    return conn
+
 # -------------------- DATABASE SETUP --------------------
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db()
     cursor = conn.cursor()
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS students (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT,
-            grade INTEGER,
-            section TEXT
+            name TEXT NOT NULL,
+            grade INTEGER NOT NULL,
+            section TEXT NOT NULL
         )
     ''')
 
@@ -25,7 +31,7 @@ def init_db():
             student_id INTEGER,
             date TEXT,
             status TEXT,
-            FOREIGN KEY(student_id) REFERENCES students(id)
+            FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
         )
     ''')
 
@@ -37,25 +43,32 @@ init_db()
 # -------------------- HOME --------------------
 @app.route('/')
 def home():
-    return "Student Attendance Record API"
+    return jsonify({"message": "Student Attendance Record API"})
 
 # -------------------- ADD STUDENT --------------------
 @app.route('/students', methods=['POST'])
 def add_student():
     data = request.get_json()
 
-    if not data or not all(k in data for k in ("name", "grade", "section")):
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    name = data.get("name")
+    grade = data.get("grade")
+    section = data.get("section")
+
+    if not all([name, grade, section]):
         return jsonify({"error": "Missing fields"}), 400
 
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db()
     cursor = conn.cursor()
 
     cursor.execute(
         "INSERT INTO students (name, grade, section) VALUES (?, ?, ?)",
-        (data["name"], data["grade"], data["section"])
+        (name, grade, section)
     )
-
     conn.commit()
+
     student_id = cursor.lastrowid
     conn.close()
 
@@ -63,11 +76,44 @@ def add_student():
         "message": "Student added",
         "student": {
             "id": student_id,
-            "name": data["name"],
-            "grade": data["grade"],
-            "section": data["section"]
+            "name": name,
+            "grade": grade,
+            "section": section
         }
     }), 201
+
+# -------------------- UPDATE STUDENT --------------------
+@app.route('/students/<int:id>', methods=['PUT'])
+def update_student(id):
+    data = request.get_json()
+
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM students WHERE id = ?", (id,))
+    if not cursor.fetchone():
+        conn.close()
+        return jsonify({"error": "Student not found"}), 404
+
+    name = data.get("name")
+    grade = data.get("grade")
+    section = data.get("section")
+
+    cursor.execute("""
+        UPDATE students
+        SET name = COALESCE(?, name),
+            grade = COALESCE(?, grade),
+            section = COALESCE(?, section)
+        WHERE id = ?
+    """, (name, grade, section, id))
+
+    conn.commit()
+    conn.close()
+
+    return jsonify({"message": "Student updated"})
 
 # -------------------- MARK ATTENDANCE --------------------
 @app.route('/students/<int:id>/attendance', methods=['POST'])
@@ -77,21 +123,23 @@ def mark_attendance(id):
     if not data or "status" not in data:
         return jsonify({"error": "Status required"}), 400
 
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT * FROM students WHERE id = ?", (id,))
-    student = cursor.fetchone()
-
-    if not student:
-        conn.close()
-        return jsonify({"error": "Student not found"}), 404
+    status = data["status"].capitalize()
+    if status not in ["Present", "Absent"]:
+        return jsonify({"error": "Status must be Present or Absent"}), 400
 
     date = data.get("date", datetime.now().strftime("%Y-%m-%d"))
 
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM students WHERE id = ?", (id,))
+    if not cursor.fetchone():
+        conn.close()
+        return jsonify({"error": "Student not found"}), 404
+
     cursor.execute(
         "INSERT INTO attendance (student_id, date, status) VALUES (?, ?, ?)",
-        (id, date, data["status"])
+        (id, date, status)
     )
 
     conn.commit()
@@ -99,16 +147,25 @@ def mark_attendance(id):
 
     return jsonify({
         "message": "Attendance recorded",
-        "record": {
-            "date": date,
-            "status": data["status"]
-        }
+        "record": {"date": date, "status": status}
     })
+
+# -------------------- DELETE ATTENDANCE --------------------
+@app.route('/attendance/<int:attendance_id>', methods=['DELETE'])
+def delete_attendance(attendance_id):
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("DELETE FROM attendance WHERE id = ?", (attendance_id,))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"message": "Attendance deleted"})
 
 # -------------------- FULL RECORD --------------------
 @app.route('/students/<int:id>/record', methods=['GET'])
 def attendance_record(id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db()
     cursor = conn.cursor()
 
     cursor.execute("SELECT name FROM students WHERE id = ?", (id,))
@@ -118,20 +175,26 @@ def attendance_record(id):
         conn.close()
         return jsonify({"error": "Student not found"}), 404
 
-    cursor.execute(
-        "SELECT date, status FROM attendance WHERE student_id = ?", (id,)
-    )
+    cursor.execute("""
+        SELECT id, date, status 
+        FROM attendance 
+        WHERE student_id = ?
+        ORDER BY date DESC
+    """, (id,))
     records = cursor.fetchall()
 
     conn.close()
 
-    attendance = [{"date": r[0], "status": r[1]} for r in records]
+    attendance = [
+        {"id": r["id"], "date": r["date"], "status": r["status"]}
+        for r in records
+    ]
 
     present = sum(1 for r in attendance if r["status"] == "Present")
     absent = sum(1 for r in attendance if r["status"] == "Absent")
 
     return jsonify({
-        "student": student[0],
+        "student": student["name"],
         "total_days": len(attendance),
         "present": present,
         "absent": absent,
@@ -141,53 +204,63 @@ def attendance_record(id):
 # -------------------- FILTER BY DATE --------------------
 @app.route('/students/<int:id>/record/<date>', methods=['GET'])
 def attendance_by_date(id, date):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db()
     cursor = conn.cursor()
 
-    cursor.execute(
-        "SELECT date, status FROM attendance WHERE student_id = ? AND date = ?",
-        (id, date)
-    )
-    records = cursor.fetchall()
+    cursor.execute("""
+        SELECT id, date, status 
+        FROM attendance 
+        WHERE student_id = ? AND date = ?
+    """, (id, date))
 
+    records = cursor.fetchall()
     conn.close()
 
     return jsonify({
         "student_id": id,
         "date": date,
-        "records": [{"date": r[0], "status": r[1]} for r in records]
+        "records": [
+            {"id": r["id"], "date": r["date"], "status": r["status"]}
+            for r in records
+        ]
     })
 
 # -------------------- GET ALL STUDENTS --------------------
 @app.route('/students', methods=['GET'])
 def get_students():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db()
     cursor = conn.cursor()
 
     cursor.execute("SELECT * FROM students")
     rows = cursor.fetchall()
-
     conn.close()
 
-    students = [
-        {"id": r[0], "name": r[1], "grade": r[2], "section": r[3]}
+    return jsonify([
+        {
+            "id": r["id"],
+            "name": r["name"],
+            "grade": r["grade"],
+            "section": r["section"]
+        }
         for r in rows
-    ]
-
-    return jsonify(students)
+    ])
 
 # -------------------- DELETE STUDENT --------------------
 @app.route('/students/<int:id>', methods=['DELETE'])
 def delete_student(id):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db()
     cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM students WHERE id = ?", (id,))
+    if not cursor.fetchone():
+        conn.close()
+        return jsonify({"error": "Student not found"}), 404
 
     cursor.execute("DELETE FROM students WHERE id = ?", (id,))
     conn.commit()
-
     conn.close()
 
-    return jsonify({"message": "Deleted successfully"})
+    return jsonify({"message": "Student deleted successfully"})
 
 # -------------------- RUN --------------------
 if __name__ == '__main__':
